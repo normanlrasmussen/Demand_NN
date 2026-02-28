@@ -1,0 +1,11 @@
+TODO:
+Read up on deep quantile regression and what it should doo
+    loss function
+    accuracy measuresment
+    What is deep quantile regreesion
+write
+    loss function
+    accuracy measuresment
+    val function
+    training function
+split data into train, val, test (4, .5, .5)

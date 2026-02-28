@@ -12,6 +12,12 @@ def pinball_loss(y_hat:torch.Tensor, y:torch.Tensor, h_cost:float, l_cost:float)
     """
     return torch.mean(h_cost * (y_hat - y).clamp(min=0) + l_cost * (y - y_hat).clamp(min=0))
 
+def rmse(y_hat:torch.Tensor, y:torch.Tensor) -> torch.Tensor:
+    """
+    This will calculate the root mean squared error
+    """
+    return torch.sqrt(torch.mean((y_hat - y) ** 2))
+
 def train(
     net:torch.nn.Module,
     optimizer:torch.optim.Optimizer,
@@ -28,9 +34,7 @@ def train(
     
     # Initialize lists to store losses and accuracies
     train_losses = []
-    train_accuracies = []
     val_losses = []
-    val_accuracies = []
 
     # Initialize iterator for the train loader
     train_loader_iter = iter(train_loader)
@@ -44,22 +48,28 @@ def train(
             x, y = next(train_loader_iter)
 
         # Move data to device
-        x, y = x.to(device), y.to(device).long()
+        x, y = x.to(device), y.to(device)
 
         # Perform a forward pass and compute the loss
         optimizer.zero_grad() 
         y_hat = net(x)
-        loss = F.cross_entropy(y_hat, y)
-        loss.backward()
+        train_loss = loss(y_hat, y)
+        train_loss.backward()
         optimizer.step()
 
         # Store the loss
-        train_losses.append(loss.item())
+        train_losses.append(train_loss.item())
 
         # Evaluate the model on the validation set
         if step % eval_interval == 0:
-            val_loss, val_acc = val_net(net, val_loader)
-            val_losses.append(val_loss)
-            val_accuracies.append(val_acc)
+            # Init the val loader iterator
+            val_loader_iter = iter(val_loader)
 
-    return train_losses, train_accuracies, val_losses, val_accuracies
+            with torch.no_grad():
+                for x, y in val_loader_iter:
+                    x, y = x.to(device), y.to(device)
+                    y_hat = net(x)
+                    val_loss = loss(y_hat, y)
+                    val_losses.append(val_loss.item())
+
+    return train_losses, val_losses

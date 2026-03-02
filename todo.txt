@@ -1,11 +1,20 @@
 TODO:
-Read up on deep quantile regression and what it should doo
-    loss function
-    accuracy measuresment
-    What is deep quantile regreesion
-write
-    loss function
-    accuracy measuresment
-    val function
-    training function
-split data into train, val, test (4, .5, .5)
+
+Functions
+- Func to do this split data into train, val, test (4, .5, .5)
+
+NN
+- Create basic network over 1 store and 1 item
+- Create trainging pipeline to try different var combinations and hyper parameters
+- Maybe Create a way to try it againist benchmark of just safety stock hold?
+
+
+
+
+NN TODO
+- Dropout (50%?)
+- Regulaization
+- Ensembling
+- Bootstrapping
+- Differnet network shapes
+- Different hyper parameters

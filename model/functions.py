@@ -3,6 +3,7 @@
 import pandas as pd
 import torch as torch
 from torch.nn import functional as F
+from tqdm import tqdm
 
 def pinball_loss(y_hat:torch.Tensor, y:torch.Tensor, h_cost:float, l_cost:float) -> torch.Tensor:
     """
@@ -22,8 +23,8 @@ def train(
     net:torch.nn.Module,
     optimizer:torch.optim.Optimizer,
     loss:callable,
-    train_loader:torch.Dataloader,
-    val_loader:torch.Dataloader,
+    train_loader:torch.utils.data.DataLoader,
+    val_loader:torch.utils.data.DataLoader,
     epochs:int,
     eval_interval:int,
     device:str
@@ -39,7 +40,8 @@ def train(
     # Initialize iterator for the train loader
     train_loader_iter = iter(train_loader)
 
-    for step in range(epochs):
+    pbar = tqdm(range(epochs), desc="Training", unit="step")
+    for step in pbar:
         # Get the next batch of data
         try:
             x, y = next(train_loader_iter)
@@ -51,7 +53,7 @@ def train(
         x, y = x.to(device), y.to(device)
 
         # Perform a forward pass and compute the loss
-        optimizer.zero_grad() 
+        optimizer.zero_grad()
         y_hat = net(x)
         train_loss = loss(y_hat, y)
         train_loss.backward()
@@ -59,17 +61,22 @@ def train(
 
         # Store the loss
         train_losses.append(train_loss.item())
+        pbar.set_postfix(train_loss=f"{train_loss.item():.4f}")
 
         # Evaluate the model on the validation set
         if step % eval_interval == 0:
-            # Init the val loader iterator
-            val_loader_iter = iter(val_loader)
-
+            net.eval()
+            val_loss_sum = 0.0
+            val_batches = 0
             with torch.no_grad():
-                for x, y in val_loader_iter:
+                for x, y in val_loader:
                     x, y = x.to(device), y.to(device)
                     y_hat = net(x)
-                    val_loss = loss(y_hat, y)
-                    val_losses.append(val_loss.item())
+                    val_loss_sum += loss(y_hat, y).item()
+                    val_batches += 1
+            net.train()
+            mean_val_loss = val_loss_sum / val_batches if val_batches else 0.0
+            val_losses.append(mean_val_loss)
+            pbar.set_postfix(train_loss=f"{train_loss.item():.4f}", val_loss=f"{mean_val_loss:.4f}")
 
     return train_losses, val_losses

@@ -2,8 +2,13 @@
 
 import pandas as pd
 import torch
+from torch._C import parse_schema
 from torch.utils.data import DataLoader, Dataset
-from data_creation import create_data
+try:
+    from .data_creation import create_data
+except ImportError:
+    from data_creation import create_data
+from typing import Tuple
 
 class DemandDataset(Dataset):
     def __init__(self, df: pd.DataFrame):
@@ -20,11 +25,34 @@ class DemandDataset(Dataset):
     def __getitem__(self, idx):
         return self.x[idx], self.y[idx]
 
-# TODO create function to call create data, and make dataloader with desired specs
+def create_dataloader(
+    input_file:str="../data/demand_data.csv", 
+    specs: Tuple[str, ...]=(), 
+    date_splits: Tuple[str, str] = ("2017-01-01", "2017-06-01"),
+    batch_size: int = 32,
+    shuffle: bool = True,
+    num_workers: int = 4,
+    pin_memory: bool = True,
+    drop_last: bool = False
+    ):
+    """
+    Create the dataloaders for the train, val, and test sets
+    """
 
+    # Create the data
+    df = create_data(input_file=input_file, specs=specs)
+    train_df = df[df['date'] < date_splits[0]]
+    val_df = df[(df['date'] >= date_splits[0]) & (df['date'] < date_splits[1])]
+    test_df = df[df['date'] >= date_splits[1]]
 
+    # Create the datasets
+    train_dataset = DemandDataset(train_df)
+    val_dataset = DemandDataset(val_df)
+    test_dataset = DemandDataset(test_df)
 
-if __name__ == "__main__":
-    df = create_data()
-    dataset = DemandDataset(df)
-    print(dataset[0])
+    # Create the loaders
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, pin_memory=pin_memory, drop_last=drop_last)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, pin_memory=pin_memory, drop_last=drop_last)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory, drop_last=drop_last)
+
+    return train_loader, val_loader, test_loader

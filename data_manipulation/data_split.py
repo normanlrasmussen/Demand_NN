@@ -1,5 +1,6 @@
 # This will split the data into train, val, test and put it all in data loaders
 
+import numpy as np
 import pandas as pd
 import torch
 from torch._C import parse_schema
@@ -27,13 +28,17 @@ class DemandDataset(Dataset):
 
 def create_dataloader(
     input_file:str="../data/demand_data.csv", 
-    specs: Tuple[str, ...]=(), 
+    specs: Tuple[str, ...]=(), # specs for the data creation
     date_splits: Tuple[str, str] = ("2017-01-01", "2017-06-01"),
-    batch_size: int = 32,
+    batch_size: int = 4,
+    test_batch_size: int = 1,
     shuffle: bool = True,
     num_workers: int = 4,
     pin_memory: bool = True,
-    drop_last: bool = False
+    drop_last: bool = False, 
+    data_mask: list[pd.Series] | None = None,  # list of boolean masks for filtering
+    combine_items: bool = False, # Put all items into one row
+    combine_stores: bool = False, # Put all stores into one row
     ):
     """
     Create the dataloaders for the train, val, and test sets
@@ -41,6 +46,43 @@ def create_dataloader(
 
     # Create the data
     df = create_data(input_file=input_file, specs=specs)
+
+    # Apply the data mask
+    if data_mask is not None:
+        combined_mask = np.logical_and.reduce(data_mask)
+        df = df[combined_mask]
+
+    if combine_items and not combine_stores:
+        wide = df.pivot(
+            index=["date", "store"],
+            columns="item",
+            values="sales",
+        )
+        wide.columns = [f"item_{c}" for c in wide.columns]
+        df = wide.reset_index()
+    
+    if combine_stores and not combine_items:
+        wide = df.pivot(
+            index=["date", "item"],
+            columns="store",
+            values="sales",
+        )
+        wide.columns = [f"store_{c}" for c in wide.columns]
+        df = wide.reset_index()
+
+    if combine_items and combine_stores:
+        wide = df.pivot(
+            index=["date"],
+            columns="item",
+            values="sales",
+        )
+        wide.columns = [f"item_{c}" for c in wide.columns]
+        df = wide.reset_index()
+
+    # TODO Remove
+    print(df.head())
+
+    # Split the data into train, val, and test
     train_df = df[df['date'] < date_splits[0]]
     val_df = df[(df['date'] >= date_splits[0]) & (df['date'] < date_splits[1])]
     test_df = df[df['date'] >= date_splits[1]]
@@ -53,6 +95,12 @@ def create_dataloader(
     # Create the loaders
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, pin_memory=pin_memory, drop_last=drop_last)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, pin_memory=pin_memory, drop_last=drop_last)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory, drop_last=drop_last)
+    test_loader = DataLoader(test_dataset, batch_size=test_batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory, drop_last=drop_last)
 
     return train_loader, val_loader, test_loader
+
+
+
+
+if __name__ == "__main__":
+    train_loader, val_loader, test_loader = create_dataloader(batch_size=8, combine_items=True)

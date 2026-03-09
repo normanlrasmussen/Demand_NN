@@ -80,3 +80,16 @@ def train(
             pbar.set_postfix(train_loss=f"{train_loss.item():.4f}", val_loss=f"{mean_val_loss:.4f}")
 
     return train_losses, val_losses
+
+def get_test_loss(net:torch.nn.Module, test_loader:torch.utils.data.DataLoader, loss:callable, device:str) -> list[float]:
+    """
+    Get the loss for the test set and return a list of losses
+    """
+    test_losses = []
+    with torch.no_grad():
+        for x, y in test_loader:
+            x, y = x.to(device), y.to(device)
+            y_hat = net(x)
+            test_loss = loss(y_hat, y)
+            test_losses.append(test_loss.item())
+    return test_losses

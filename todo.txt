@@ -1,9 +1,12 @@
 TODO:
 
 
+FIRST: FIX tHE COMBINE ITEMS PART
+
 NEXT:
 - Add a nice plotting function
 - Add a text validation to see how it works (Maybe do a nice version over all of the test data)
+- Add a way to split everything into either just one store and one time, or 1 store, and how many items of each place
 
 NN
 - Create basic network over 1 store and 1 item
@@ -11,7 +14,11 @@ NN
 - Maybe Create a way to try it againist benchmark of just safety stock hold?
 
 
+LOSS 
+- Consider penalizing it from going to far from the mean?
 
+Strat:
+- Consider "Grad" search of possible columns, try each oclumn and see how much the loss was decreased by and repeeat until minimun is reached. 
 
 NN TODO
 - Dropout (50%?)

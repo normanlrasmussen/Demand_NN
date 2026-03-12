@@ -1,9 +1,3 @@
-
-NEXT:
-- Add a nice plotting function
-- Add a text validation to see how it works (Maybe do a nice version over all of the test data)
-- Add a way to split everything into either just one store and one time, or 1 store, and how many items of each place
-
 NN:
 - Create basic network over 1 store and 1 item
 - Create trainging pipeline to try different var combinations and hyper parameters

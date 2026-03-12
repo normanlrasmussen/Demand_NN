@@ -85,7 +85,7 @@ def create_dataloader(
     num_workers: int = 4,
     pin_memory: bool = True,
     drop_last: bool = False, 
-    data_mask: list[pd.Series] | None = None,  # list of boolean masks for filtering
+    data_mask: list[tuple[str, int]] | None = None,  # list of boolean masks for filtering
     combine_items: bool = False, # Put all items into one row
     combine_stores: bool = False, # Put all stores into one row
     ):
@@ -98,7 +98,17 @@ def create_dataloader(
 
     # Apply the data mask
     if data_mask is not None:
-        combined_mask = np.logical_and.reduce(data_mask)
+        resolved_masks: list[pd.Series] = []
+        for m in data_mask:
+            # Allow simple (column, value) specs like ("store", 1)
+            if isinstance(m, tuple) and len(m) == 2:
+                col, val = m
+                resolved_masks.append(df[col] == val)
+            else:
+                # Assume it's already a boolean Series / array-like mask
+                resolved_masks.append(m)
+
+        combined_mask = np.logical_and.reduce(resolved_masks)
         df = df[combined_mask]
 
     # Split the data into train, val, and test

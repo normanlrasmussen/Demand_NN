@@ -64,20 +64,21 @@ def train(
         pbar.set_postfix(train_loss=f"{train_loss.item():.4f}")
 
         # Evaluate the model on the validation set
-        if step % eval_interval == 0:
-            net.eval()
-            val_loss_sum = 0.0
-            val_batches = 0
-            with torch.no_grad():
-                for x, y in val_loader:
-                    x, y = x.to(device), y.to(device)
-                    y_hat = net(x)
-                    val_loss_sum += loss(y_hat, y).item()
-                    val_batches += 1
-            net.train()
-            mean_val_loss = val_loss_sum / val_batches if val_batches else 0.0
-            val_losses.append(mean_val_loss)
-            pbar.set_postfix(train_loss=f"{train_loss.item():.4f}", val_loss=f"{mean_val_loss:.4f}")
+        if eval_interval is not None:
+            if step % eval_interval == 0:
+                net.eval()
+                val_loss_sum = 0.0
+                val_batches = 0
+                with torch.no_grad():
+                    for x, y in val_loader:
+                        x, y = x.to(device), y.to(device)
+                        y_hat = net(x)
+                        val_loss_sum += loss(y_hat, y).item()
+                        val_batches += 1
+                net.train()
+                mean_val_loss = val_loss_sum / val_batches if val_batches else 0.0
+                val_losses.append(mean_val_loss)
+                pbar.set_postfix(train_loss=f"{train_loss.item():.4f}", val_loss=f"{mean_val_loss:.4f}")
 
     return train_losses, val_losses
 

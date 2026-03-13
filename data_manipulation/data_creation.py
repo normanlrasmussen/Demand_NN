@@ -140,7 +140,7 @@ def create_data(input_file:str="../data/demand_data.csv", output_file:str=None, 
             .mean()
             .reset_index(level=[0, 1], drop=True)
         )
-    # Add rolling volatility (std)
+    # Add rolling volatility (std), then backfill initial NaNs within each series
     for spec, window in [("7_day_rolling_volatility", 7), ("30_day_rolling_volatility", 30),
                          ("90_day_rolling_volatility", 90), ("180_day_rolling_volatility", 180),
                          ("365_day_rolling_volatility", 365)]:
@@ -149,6 +149,8 @@ def create_data(input_file:str="../data/demand_data.csv", output_file:str=None, 
                 df.groupby(["store", "item"])["sales"]
                 .transform(lambda x: x.rolling(window=window, min_periods=1).std())
             )
+            # Backfill NaNs within each (store, item) time series
+            df[spec] = df.groupby(["store", "item"])[spec].transform(lambda x: x.bfill())
 
     # Add rolling minimum
     for spec, window in [("7_day_rolling_min", 7), ("30_day_rolling_min", 30),

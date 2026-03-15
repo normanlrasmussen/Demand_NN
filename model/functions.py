@@ -27,7 +27,8 @@ def train(
     val_loader:torch.utils.data.DataLoader,
     epochs:int,
     eval_interval:int,
-    device:str
+    device:str,
+    tqdm: bool = True,
 ) -> None:
     """
     This will train the model
@@ -40,7 +41,7 @@ def train(
     # Initialize iterator for the train loader
     train_loader_iter = iter(train_loader)
 
-    pbar = tqdm(range(epochs), desc="Training", unit="step")
+    pbar = tqdm(range(epochs), desc="Training", unit="step") if tqdm else range(epochs)
     for step in pbar:
         # Get the next batch of data
         try:
@@ -61,7 +62,8 @@ def train(
 
         # Store the loss
         train_losses.append(train_loss.item())
-        pbar.set_postfix(train_loss=f"{train_loss.item():.4f}")
+        if tqdm:
+            pbar.set_postfix(train_loss=f"{train_loss.item():.4f}")
 
         # Evaluate the model on the validation set
         if eval_interval is not None:
@@ -78,7 +80,8 @@ def train(
                 net.train()
                 mean_val_loss = val_loss_sum / val_batches if val_batches else 0.0
                 val_losses.append(mean_val_loss)
-                pbar.set_postfix(train_loss=f"{train_loss.item():.4f}", val_loss=f"{mean_val_loss:.4f}")
+                if tqdm:
+                    pbar.set_postfix(train_loss=f"{train_loss.item():.4f}", val_loss=f"{mean_val_loss:.4f}")
 
     return train_losses, val_losses
 

@@ -28,8 +28,8 @@ def train(
     epochs:int,
     eval_interval:int,
     device:str,
-    tqdm: bool = True,
-) -> None:
+    use_tqdm: bool = True,
+) -> tuple[list[float], list[float]]:
     """
     This will train the model
     """
@@ -41,7 +41,7 @@ def train(
     # Initialize iterator for the train loader
     train_loader_iter = iter(train_loader)
 
-    pbar = tqdm(range(epochs), desc="Training", unit="step") if tqdm else range(epochs)
+    pbar = tqdm(range(epochs), desc="Training", unit="step") if use_tqdm else range(epochs)
     for step in pbar:
         # Get the next batch of data
         try:
@@ -62,7 +62,7 @@ def train(
 
         # Store the loss
         train_losses.append(train_loss.item())
-        if tqdm:
+        if use_tqdm:
             pbar.set_postfix(train_loss=f"{train_loss.item():.4f}")
 
         # Evaluate the model on the validation set
@@ -80,7 +80,7 @@ def train(
                 net.train()
                 mean_val_loss = val_loss_sum / val_batches if val_batches else 0.0
                 val_losses.append(mean_val_loss)
-                if tqdm:
+                if use_tqdm:
                     pbar.set_postfix(train_loss=f"{train_loss.item():.4f}", val_loss=f"{mean_val_loss:.4f}")
 
     return train_losses, val_losses

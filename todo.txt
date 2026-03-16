@@ -1,7 +1,12 @@
-NN:
-- Create basic network over 1 store and 1 item
-- Create trainging pipeline to try different var combinations and hyper parameters
-- Maybe Create a way to try it againist benchmark of just safety stock hold?
+- I want to get this running for 1 store
+    Need to make new data creators so that way I can do one for combine stores and items, 
+    needs individual ones so that way it can keep all the correct features, ebcause some will carry over, and some wont
+
+
+- Think of Code that discourages being risky, we want it perform close
+- Check aganist safety stock
+
+
 
 Strat:
 - Consider "Grad" search of possible columns, try each oclumn and see how much the loss was decreased by and repeeat until minimun is reached. 

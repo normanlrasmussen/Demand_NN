@@ -6,61 +6,13 @@ import torch
 from torch._C import parse_schema
 from torch.utils.data import DataLoader, Dataset
 try:
-    from .data_creation import create_data
+    from .data_creation import create_data_all_data, create_data_consolidated_by_item, create_data_consolidated_by_store, create_data_consolidated_by_both
 except ImportError:
-    from data_creation import create_data
+    from data_creation import create_data_all_data, create_data_consolidated_by_item, create_data_consolidated_by_store, create_data_consolidated_by_both
 from typing import Tuple
 
 class DemandDataset(Dataset):
-    def __init__(self, df: pd.DataFrame, combine_items: bool = False, combine_stores: bool = False):
-
-        # No combining – standard single-output target (sales)
-        if not combine_items and not combine_stores:
-            drop_columns = ["date", "sales", "store", "item"]
-            target_columns = ["sales"]
-
-        # Combine all items into a multi-output target per (date, store)
-        elif combine_items and not combine_stores:
-            target_columns = [f"item_{c}" for c in df["item"].unique()]
-            wide = df.pivot(
-                index=["date", "store"],
-                columns="item",
-                values="sales",
-            )
-            wide.columns = [f"item_{c}" for c in wide.columns]
-            df = wide.reset_index()
-            print(df.head())
-            # Keep non-target columns (e.g., store) as features
-            drop_columns = ["date"] + target_columns
-
-        # Combine all stores into a multi-output target per (date, item)
-        elif combine_stores and not combine_items:
-            target_columns = [f"store_{c}" for c in df["store"].unique()]
-            wide = df.pivot(
-                index=["date", "item"],
-                columns="store",
-                values="sales",
-            )
-            wide.columns = [f"store_{c}" for c in wide.columns]
-            df = wide.reset_index()
-            # Keep non-target columns (e.g., item) as features
-            drop_columns = ["date"] + target_columns
-
-        # Combine both stores and items into one wide vector per date:
-        # columns are store_{store}_item_{item}
-        elif combine_items and combine_stores:
-            wide = df.pivot(
-                index=["date"],
-                columns=["store", "item"],
-                values="sales",
-            )
-            wide.columns = [f"store_{s}_item_{i}" for (s, i) in wide.columns]
-            df = wide.reset_index()
-            target_columns = [c for c in df.columns if c.startswith("store_")]
-            drop_columns = ["date"] + target_columns
-
-
-
+    def __init__(self, df: pd.DataFrame, drop_columns: list[str], target_columns: list[str]):
 
         # Extract numeric features and target as writable float32 arrays
         x_np = df.drop(columns=drop_columns).to_numpy(dtype="float32", copy=True)
@@ -93,23 +45,15 @@ def create_dataloader(
     Create the dataloaders for the train, val, and test sets
     """
 
-    # Create the data
-    df = create_data(input_file=input_file, specs=specs)
-
-    # Apply the data mask
-    if data_mask is not None:
-        resolved_masks: list[pd.Series] = []
-        for m in data_mask:
-            # Allow simple (column, value) specs like ("store", 1)
-            if isinstance(m, tuple) and len(m) == 2:
-                col, val = m
-                resolved_masks.append(df[col] == val)
-            else:
-                # Assume it's already a boolean Series / array-like mask
-                resolved_masks.append(m)
-
-        combined_mask = np.logical_and.reduce(resolved_masks)
-        df = df[combined_mask]
+    # Get the data
+    if not combine_items and not combine_stores:
+        df, drop_columns, target_columns = create_data_all_data(input_file=input_file, specs=specs, data_mask=data_mask)
+    elif combine_items and not combine_stores:
+        df, drop_columns, target_columns = create_data_consolidated_by_item(input_file=input_file, specs=specs, data_mask=data_mask)
+    elif not combine_items and combine_stores:
+        df, drop_columns, target_columns = create_data_consolidated_by_store(input_file=input_file, specs=specs, data_mask=data_mask)
+    elif combine_items and combine_stores:
+        df, drop_columns, target_columns = create_data_consolidated_by_both(input_file=input_file, specs=specs, data_mask=data_mask)
 
     # Split the data into train, val, and test
     train_df = df[df['date'] < date_splits[0]]
@@ -117,9 +61,9 @@ def create_dataloader(
     test_df = df[df['date'] >= date_splits[1]]
 
     # Create the datasets
-    train_dataset = DemandDataset(train_df, combine_items=combine_items, combine_stores=combine_stores)
-    val_dataset = DemandDataset(val_df, combine_items=combine_items, combine_stores=combine_stores)
-    test_dataset = DemandDataset(test_df, combine_items=combine_items, combine_stores=combine_stores)
+    train_dataset = DemandDataset(train_df, drop_columns=drop_columns, target_columns=target_columns)
+    val_dataset = DemandDataset(val_df, drop_columns=drop_columns, target_columns=target_columns)
+    test_dataset = DemandDataset(test_df, drop_columns=drop_columns, target_columns=target_columns)
 
     # Create the loaders
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, pin_memory=pin_memory, drop_last=drop_last)

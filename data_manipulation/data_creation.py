@@ -253,7 +253,7 @@ def create_data_all_data(
         df.to_csv(output_file, index=False)
 
     # Determine the columns to drop and the target columns
-    drop_columns = ["date", "store", "item"]
+    drop_columns = ["date", "store", "item", "sales"]
     target_columns = ["sales"]
 
     return df, drop_columns, target_columns

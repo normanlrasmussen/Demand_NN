@@ -18,3 +18,11 @@ NN TODO
 - Bootstrapping
 - Differnet network shapes
 - Different hyper parameters
+
+
+
+
+
+Ideas,
+    maybe itwilll work better to just train a nn for each item and each store
+    train 1 on all data, and then slowly unfreee the other layers

@@ -1,6 +1,14 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
 from typing import Tuple
+
+
+def _concat_new_cols(df: pd.DataFrame, new_cols: dict[str, pd.Series]) -> pd.DataFrame:
+    """Append many columns at once to avoid pandas block fragmentation."""
+    if not new_cols:
+        return df
+    return pd.concat([df, pd.DataFrame(new_cols)], axis=1)
+
 
 ROLLING_MEAN_SPECS = ("7_day_rolling_mean", "30_day_rolling_mean", "90_day_rolling_mean", "180_day_rolling_mean", "365_day_rolling_mean")
 ROLLING_VOLATILITY_SPECS = ("7_day_rolling_volatility", "30_day_rolling_volatility", "90_day_rolling_volatility", "180_day_rolling_volatility", "365_day_rolling_volatility")
@@ -140,41 +148,44 @@ def create_data_all_data(
     if any_rolling:
         # Sort the data by store, item, and date for any rolling mean
         df = df.sort_values(["store", "item", "date"])
+    rolling_mean_new: dict[str, pd.Series] = {}
     if "7_day_rolling_mean" in specs:
-        df["7_day_rolling_mean"] = (
+        rolling_mean_new["7_day_rolling_mean"] = (
             df.groupby(["store", "item"])["sales"]
             .rolling(window=7, min_periods=1)
             .mean()
             .reset_index(level=[0, 1], drop=True)
         )
     if "30_day_rolling_mean" in specs:
-        df["30_day_rolling_mean"] = (
+        rolling_mean_new["30_day_rolling_mean"] = (
             df.groupby(["store", "item"])["sales"]
             .rolling(window=30, min_periods=1)
             .mean()
             .reset_index(level=[0, 1], drop=True)
         )
     if "90_day_rolling_mean" in specs:
-        df["90_day_rolling_mean"] = (
+        rolling_mean_new["90_day_rolling_mean"] = (
             df.groupby(["store", "item"])["sales"]
             .rolling(window=90, min_periods=1)
             .mean()
             .reset_index(level=[0, 1], drop=True)
         )
     if "180_day_rolling_mean" in specs:
-        df["180_day_rolling_mean"] = (
+        rolling_mean_new["180_day_rolling_mean"] = (
             df.groupby(["store", "item"])["sales"]
             .rolling(window=180, min_periods=1)
             .mean()
             .reset_index(level=[0, 1], drop=True)
         )
     if "365_day_rolling_mean" in specs:
-        df["365_day_rolling_mean"] = (
+        rolling_mean_new["365_day_rolling_mean"] = (
             df.groupby(["store", "item"])["sales"]
             .rolling(window=365, min_periods=1)
             .mean()
             .reset_index(level=[0, 1], drop=True)
         )
+    df = _concat_new_cols(df, rolling_mean_new)
+
     # Add rolling volatility (std), then backfill initial NaNs within each series
     for spec, window in [
         ("7_day_rolling_volatility", 7),
@@ -184,11 +195,17 @@ def create_data_all_data(
         ("365_day_rolling_volatility", 365),
     ]:
         if spec in specs:
-            df[spec] = df.groupby(["store", "item"])["sales"].transform(
+            s = df.groupby(["store", "item"])["sales"].transform(
                 lambda x, w=window: x.rolling(window=w, min_periods=1).std()
             )
-            # Backfill NaNs within each (store, item) time series
-            df[spec] = df.groupby(["store", "item"])[spec].transform(lambda x: x.bfill())
+            df = _concat_new_cols(
+                df,
+                {
+                    spec: s.groupby([df["store"], df["item"]]).transform(
+                        lambda x: x.bfill()
+                    )
+                },
+            )
 
     # Add rolling minimum
     for spec, window in [
@@ -199,8 +216,13 @@ def create_data_all_data(
         ("365_day_rolling_min", 365),
     ]:
         if spec in specs:
-            df[spec] = df.groupby(["store", "item"])["sales"].transform(
-                lambda x, w=window: x.rolling(window=w, min_periods=1).min()
+            df = _concat_new_cols(
+                df,
+                {
+                    spec: df.groupby(["store", "item"])["sales"].transform(
+                        lambda x, w=window: x.rolling(window=w, min_periods=1).min()
+                    )
+                },
             )
 
     # Add rolling EMA
@@ -212,21 +234,32 @@ def create_data_all_data(
         ("365_day_rolling_ema", 365),
     ]:
         if spec in specs:
-            df[spec] = df.groupby(["store", "item"])["sales"].transform(
-                lambda x, s=span: x.ewm(span=s, adjust=False).mean()
+            df = _concat_new_cols(
+                df,
+                {
+                    spec: df.groupby(["store", "item"])["sales"].transform(
+                        lambda x, s=span: x.ewm(span=s, adjust=False).mean()
+                    )
+                },
             )
     if any_rolling:
         df = df.sort_values(["date", "store", "item"])
 
     # Add lagged variables (1-7, 14, 28, 365 days); fill NaN with forward-looking values (bfill)
-    lag_cols_added = []
+    lag_cols_added: list[str] = []
+    lag_new: dict[str, pd.Series] = {}
     for spec, period in LAG_SPECS.items():
         if spec in specs:
-            df[spec] = df.groupby(["store", "item"])["sales"].shift(period)
+            lag_new[spec] = df.groupby(["store", "item"])["sales"].shift(period)
             lag_cols_added.append(spec)
+    df = _concat_new_cols(df, lag_new)
     if lag_cols_added:
-        for col in lag_cols_added:
-            df[col] = df.groupby(["store", "item"])[col].transform(lambda x: x.bfill())
+        df = df.assign(
+            **{
+                col: df.groupby(["store", "item"])[col].transform(lambda x: x.bfill())
+                for col in lag_cols_added
+            }
+        )
 
     # Add diff features (sales - X day lag); fill NaN with bfill
     DIFF_SPECS = {
@@ -237,15 +270,21 @@ def create_data_all_data(
         "diff_180_day": 180,
         "diff_365_day": 365,
     }
-    diff_cols_added = []
+    diff_cols_added: list[str] = []
+    diff_new: dict[str, pd.Series] = {}
     for spec, period in DIFF_SPECS.items():
         if spec in specs:
             shifted = df.groupby(["store", "item"])["sales"].shift(period)
-            df[spec] = df["sales"] - shifted
+            diff_new[spec] = df["sales"] - shifted
             diff_cols_added.append(spec)
+    df = _concat_new_cols(df, diff_new)
     if diff_cols_added:
-        for col in diff_cols_added:
-            df[col] = df.groupby(["store", "item"])[col].transform(lambda x: x.bfill())
+        df = df.assign(
+            **{
+                col: df.groupby(["store", "item"])[col].transform(lambda x: x.bfill())
+                for col in diff_cols_added
+            }
+        )
 
 
     # Check to see if outfile
@@ -424,10 +463,13 @@ def create_data_consolidated_by_store(
         ("365_day_rolling_mean", 365),
     ]:
         if spec in specs:
+            new_cols: dict[str, pd.Series] = {}
             for col in item_columns:
-                df[_feat_name(col, spec)] = df.groupby("store")[col].transform(
+                out_col = _feat_name(col, spec)
+                new_cols[out_col] = df.groupby("store")[col].transform(
                     lambda x, w=window: x.rolling(window=w, min_periods=1).mean()
                 )
+            df = _concat_new_cols(df, new_cols)
 
     # Rolling volatility (std), then backfill initial NaNs within each store series
     for spec, window in [
@@ -438,12 +480,14 @@ def create_data_consolidated_by_store(
         ("365_day_rolling_volatility", 365),
     ]:
         if spec in specs:
+            new_cols = {}
             for col in item_columns:
                 out_col = _feat_name(col, spec)
-                df[out_col] = df.groupby("store")[col].transform(
+                s = df.groupby("store")[col].transform(
                     lambda x, w=window: x.rolling(window=w, min_periods=1).std()
                 )
-                df[out_col] = df.groupby("store")[out_col].transform(lambda x: x.bfill())
+                new_cols[out_col] = s.groupby(df["store"]).transform(lambda x: x.bfill())
+            df = _concat_new_cols(df, new_cols)
 
     # Rolling minimum
     for spec, window in [
@@ -454,10 +498,13 @@ def create_data_consolidated_by_store(
         ("365_day_rolling_min", 365),
     ]:
         if spec in specs:
+            new_cols = {}
             for col in item_columns:
-                df[_feat_name(col, spec)] = df.groupby("store")[col].transform(
+                out_col = _feat_name(col, spec)
+                new_cols[out_col] = df.groupby("store")[col].transform(
                     lambda x, w=window: x.rolling(window=w, min_periods=1).min()
                 )
+            df = _concat_new_cols(df, new_cols)
 
     # Rolling EMA
     for spec, span in [
@@ -468,22 +515,31 @@ def create_data_consolidated_by_store(
         ("365_day_rolling_ema", 365),
     ]:
         if spec in specs:
+            new_cols = {}
             for col in item_columns:
-                df[_feat_name(col, spec)] = df.groupby("store")[col].transform(
+                out_col = _feat_name(col, spec)
+                new_cols[out_col] = df.groupby("store")[col].transform(
                     lambda x, s=span: x.ewm(span=s, adjust=False).mean()
                 )
+            df = _concat_new_cols(df, new_cols)
 
     # Lags (fill NaN with forward-looking values within each store series)
     lag_cols_added: list[str] = []
+    lag_new: dict[str, pd.Series] = {}
     for spec, period in LAG_SPECS.items():
         if spec in specs:
             for col in item_columns:
                 out_col = _feat_name(col, spec)
-                df[out_col] = df.groupby("store")[col].shift(period)
+                lag_new[out_col] = df.groupby("store")[col].shift(period)
                 lag_cols_added.append(out_col)
+    df = _concat_new_cols(df, lag_new)
     if lag_cols_added:
-        for col in lag_cols_added:
-            df[col] = df.groupby("store")[col].transform(lambda x: x.bfill())
+        df = df.assign(
+            **{
+                col: df.groupby("store")[col].transform(lambda x: x.bfill())
+                for col in lag_cols_added
+            }
+        )
 
     # Diffs (col - X day lag); fill NaN with bfill
     DIFF_SPECS = {
@@ -495,16 +551,22 @@ def create_data_consolidated_by_store(
         "diff_365_day": 365,
     }
     diff_cols_added: list[str] = []
+    diff_new: dict[str, pd.Series] = {}
     for spec, period in DIFF_SPECS.items():
         if spec in specs:
             for col in item_columns:
                 out_col = _feat_name(col, spec)
                 shifted = df.groupby("store")[col].shift(period)
-                df[out_col] = df[col] - shifted
+                diff_new[out_col] = df[col] - shifted
                 diff_cols_added.append(out_col)
+    df = _concat_new_cols(df, diff_new)
     if diff_cols_added:
-        for col in diff_cols_added:
-            df[col] = df.groupby("store")[col].transform(lambda x: x.bfill())
+        df = df.assign(
+            **{
+                col: df.groupby("store")[col].transform(lambda x: x.bfill())
+                for col in diff_cols_added
+            }
+        )
 
     if any_roll_specs or any_lag_or_diff:
         df = df.sort_values(["date", "store"])
@@ -687,10 +749,13 @@ def create_data_consolidated_by_item(
         ("365_day_rolling_mean", 365),
     ]:
         if spec in specs:
+            new_cols: dict[str, pd.Series] = {}
             for col in store_columns:
-                df[_feat_name(col, spec)] = df.groupby("item")[col].transform(
+                out_col = _feat_name(col, spec)
+                new_cols[out_col] = df.groupby("item")[col].transform(
                     lambda x, w=window: x.rolling(window=w, min_periods=1).mean()
                 )
+            df = _concat_new_cols(df, new_cols)
 
     # Rolling volatility (std), then backfill initial NaNs within each item series
     for spec, window in [
@@ -701,12 +766,14 @@ def create_data_consolidated_by_item(
         ("365_day_rolling_volatility", 365),
     ]:
         if spec in specs:
+            new_cols = {}
             for col in store_columns:
                 out_col = _feat_name(col, spec)
-                df[out_col] = df.groupby("item")[col].transform(
+                s = df.groupby("item")[col].transform(
                     lambda x, w=window: x.rolling(window=w, min_periods=1).std()
                 )
-                df[out_col] = df.groupby("item")[out_col].transform(lambda x: x.bfill())
+                new_cols[out_col] = s.groupby(df["item"]).transform(lambda x: x.bfill())
+            df = _concat_new_cols(df, new_cols)
 
     # Rolling minimum
     for spec, window in [
@@ -717,10 +784,13 @@ def create_data_consolidated_by_item(
         ("365_day_rolling_min", 365),
     ]:
         if spec in specs:
+            new_cols = {}
             for col in store_columns:
-                df[_feat_name(col, spec)] = df.groupby("item")[col].transform(
+                out_col = _feat_name(col, spec)
+                new_cols[out_col] = df.groupby("item")[col].transform(
                     lambda x, w=window: x.rolling(window=w, min_periods=1).min()
                 )
+            df = _concat_new_cols(df, new_cols)
 
     # Rolling EMA
     for spec, span in [
@@ -731,22 +801,31 @@ def create_data_consolidated_by_item(
         ("365_day_rolling_ema", 365),
     ]:
         if spec in specs:
+            new_cols = {}
             for col in store_columns:
-                df[_feat_name(col, spec)] = df.groupby("item")[col].transform(
+                out_col = _feat_name(col, spec)
+                new_cols[out_col] = df.groupby("item")[col].transform(
                     lambda x, s=span: x.ewm(span=s, adjust=False).mean()
                 )
+            df = _concat_new_cols(df, new_cols)
 
     # Lags (fill NaN with forward-looking values within each item series)
     lag_cols_added: list[str] = []
+    lag_new: dict[str, pd.Series] = {}
     for spec, period in LAG_SPECS.items():
         if spec in specs:
             for col in store_columns:
                 out_col = _feat_name(col, spec)
-                df[out_col] = df.groupby("item")[col].shift(period)
+                lag_new[out_col] = df.groupby("item")[col].shift(period)
                 lag_cols_added.append(out_col)
+    df = _concat_new_cols(df, lag_new)
     if lag_cols_added:
-        for col in lag_cols_added:
-            df[col] = df.groupby("item")[col].transform(lambda x: x.bfill())
+        df = df.assign(
+            **{
+                col: df.groupby("item")[col].transform(lambda x: x.bfill())
+                for col in lag_cols_added
+            }
+        )
 
     # Diffs (col - X day lag); fill NaN with bfill
     DIFF_SPECS = {
@@ -758,16 +837,22 @@ def create_data_consolidated_by_item(
         "diff_365_day": 365,
     }
     diff_cols_added: list[str] = []
+    diff_new: dict[str, pd.Series] = {}
     for spec, period in DIFF_SPECS.items():
         if spec in specs:
             for col in store_columns:
                 out_col = _feat_name(col, spec)
                 shifted = df.groupby("item")[col].shift(period)
-                df[out_col] = df[col] - shifted
+                diff_new[out_col] = df[col] - shifted
                 diff_cols_added.append(out_col)
+    df = _concat_new_cols(df, diff_new)
     if diff_cols_added:
-        for col in diff_cols_added:
-            df[col] = df.groupby("item")[col].transform(lambda x: x.bfill())
+        df = df.assign(
+            **{
+                col: df.groupby("item")[col].transform(lambda x: x.bfill())
+                for col in diff_cols_added
+            }
+        )
 
     if any_roll_specs or any_lag_or_diff:
         df = df.sort_values(["date", "item"])
@@ -949,10 +1034,13 @@ def create_data_consolidated_by_both(
         ("365_day_rolling_mean", 365),
     ]:
         if spec in specs:
+            new_cols: dict[str, pd.Series] = {}
             for col in store_item_columns:
-                df[_feat_name(col, spec)] = df[col].rolling(
+                out_col = _feat_name(col, spec)
+                new_cols[out_col] = df[col].rolling(
                     window=window, min_periods=1
                 ).mean()
+            df = _concat_new_cols(df, new_cols)
 
     # Rolling volatility (std), then backfill initial NaNs
     for spec, window in [
@@ -963,12 +1051,12 @@ def create_data_consolidated_by_both(
         ("365_day_rolling_volatility", 365),
     ]:
         if spec in specs:
+            new_cols = {}
             for col in store_item_columns:
                 out_col = _feat_name(col, spec)
-                df[out_col] = df[col].rolling(
-                    window=window, min_periods=1
-                ).std()
-                df[out_col] = df[out_col].bfill()
+                s = df[col].rolling(window=window, min_periods=1).std()
+                new_cols[out_col] = s.bfill()
+            df = _concat_new_cols(df, new_cols)
 
     # Rolling minimum
     for spec, window in [
@@ -979,10 +1067,13 @@ def create_data_consolidated_by_both(
         ("365_day_rolling_min", 365),
     ]:
         if spec in specs:
+            new_cols = {}
             for col in store_item_columns:
-                df[_feat_name(col, spec)] = df[col].rolling(
+                out_col = _feat_name(col, spec)
+                new_cols[out_col] = df[col].rolling(
                     window=window, min_periods=1
                 ).min()
+            df = _concat_new_cols(df, new_cols)
 
     # Rolling EMA
     for spec, span in [
@@ -993,22 +1084,26 @@ def create_data_consolidated_by_both(
         ("365_day_rolling_ema", 365),
     ]:
         if spec in specs:
+            new_cols = {}
             for col in store_item_columns:
-                df[_feat_name(col, spec)] = df[col].ewm(
+                out_col = _feat_name(col, spec)
+                new_cols[out_col] = df[col].ewm(
                     span=span, adjust=False
                 ).mean()
+            df = _concat_new_cols(df, new_cols)
 
     # Lags (fill NaN with forward-looking values)
     lag_cols_added: list[str] = []
+    lag_new: dict[str, pd.Series] = {}
     for spec, period in LAG_SPECS.items():
         if spec in specs:
             for col in store_item_columns:
                 out_col = _feat_name(col, spec)
-                df[out_col] = df[col].shift(period)
+                lag_new[out_col] = df[col].shift(period)
                 lag_cols_added.append(out_col)
+    df = _concat_new_cols(df, lag_new)
     if lag_cols_added:
-        for col in lag_cols_added:
-            df[col] = df[col].bfill()
+        df = df.assign(**{col: df[col].bfill() for col in lag_cols_added})
 
     # Diffs (col - X day lag); fill NaN with bfill
     DIFF_SPECS = {
@@ -1020,16 +1115,17 @@ def create_data_consolidated_by_both(
         "diff_365_day": 365,
     }
     diff_cols_added: list[str] = []
+    diff_new: dict[str, pd.Series] = {}
     for spec, period in DIFF_SPECS.items():
         if spec in specs:
             for col in store_item_columns:
                 out_col = _feat_name(col, spec)
                 shifted = df[col].shift(period)
-                df[out_col] = df[col] - shifted
+                diff_new[out_col] = df[col] - shifted
                 diff_cols_added.append(out_col)
+    df = _concat_new_cols(df, diff_new)
     if diff_cols_added:
-        for col in diff_cols_added:
-            df[col] = df[col].bfill()
+        df = df.assign(**{col: df[col].bfill() for col in diff_cols_added})
 
     if any_roll_specs or any_lag_or_diff:
         df = df.sort_values(["date"])

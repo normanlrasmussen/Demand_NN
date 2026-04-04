@@ -13,6 +13,14 @@ def pinball_loss(y_hat:torch.Tensor, y:torch.Tensor, h_cost:float, l_cost:float)
     """
     return torch.mean(h_cost * (y_hat - y).clamp(min=0) + l_cost * (y - y_hat).clamp(min=0))
 
+def pinball_loss_sum(y_hat:torch.Tensor, y:torch.Tensor, h_cost:float, l_cost:float) -> torch.Tensor:
+    """
+    This will calculate the pinball loss i.e.
+    if y_hat > y, then the loss is h_cost * (y_hat - y)
+    if y_hat < y, then the loss is l_cost * (y - y_hat)
+    """
+    return torch.sum(h_cost * (y_hat - y).clamp(min=0) + l_cost * (y - y_hat).clamp(min=0))
+
 def pinball_loss_tensor(y_hat:torch.Tensor, y:torch.Tensor, h_cost:float, l_cost:float) -> torch.Tensor:
     """
     This will calculate the pinball loss i.e.

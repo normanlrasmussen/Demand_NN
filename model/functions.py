@@ -13,6 +13,14 @@ def pinball_loss(y_hat:torch.Tensor, y:torch.Tensor, h_cost:float, l_cost:float)
     """
     return torch.mean(h_cost * (y_hat - y).clamp(min=0) + l_cost * (y - y_hat).clamp(min=0))
 
+def pinball_loss_tensor(y_hat:torch.Tensor, y:torch.Tensor, h_cost:float, l_cost:float) -> torch.Tensor:
+    """
+    This will calculate the pinball loss i.e.
+    if y_hat > y, then the loss is h_cost * (y_hat - y)
+    if y_hat < y, then the loss is l_cost * (y - y_hat)
+    """
+    return h_cost * (y_hat - y).clamp(min=0) + l_cost * (y - y_hat).clamp(min=0)
+
 def rmse(y_hat:torch.Tensor, y:torch.Tensor) -> torch.Tensor:
     """
     This will calculate the root mean squared error
@@ -97,3 +105,4 @@ def get_test_loss(net:torch.nn.Module, test_loader:torch.utils.data.DataLoader, 
             test_loss = loss(y_hat, y)
             test_losses.append(test_loss.item())
     return test_losses
+

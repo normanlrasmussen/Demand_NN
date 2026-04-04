@@ -1,6 +1,9 @@
-- I want to get this running for 1 store
-    Need to make new data creators so that way I can do one for combine stores and items, 
-    needs individual ones so that way it can keep all the correct features, ebcause some will carry over, and some wont
+-> Safety stock
+-> Soe sort of anti risky Regulaization (Square?)
+-> LrRegularization
+
+
+
 
 
 - Think of Code that discourages being risky, we want it perform close

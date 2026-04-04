@@ -21,6 +21,10 @@ class DemandDataset(Dataset):
         self.x = torch.from_numpy(x_np)
         self.y = torch.from_numpy(y_np)
 
+        # Save the column names for x, y
+        self.x_columns = df.drop(columns=drop_columns).columns
+        self.y_columns = target_columns
+
     def __len__(self):
         return len(self.x)
 

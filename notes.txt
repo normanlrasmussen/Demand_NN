@@ -1,5 +1,5 @@
 
-
-
-FOR NN:
-    -Lower batch size is better (8)
+I want to get the best store predictor 
+-> Try lr scheduling
+-> Try drop out
+-> 

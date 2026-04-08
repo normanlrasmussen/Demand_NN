@@ -45,14 +45,37 @@ def train(
     eval_interval:int,
     device:str,
     use_tqdm: bool = True,
+    use_one_cycle_lr: bool = False,
+    one_cycle_max_lr: float | None = None,
 ) -> tuple[list[float], list[float]]:
     """
-    This will train the model
+    This will train the model.
+
+    If use_one_cycle_lr is True, applies OneCycleLR with the same hyperparameters as
+    OneCycleLR_pct0.2_div10 (pct_start=0.2, cosine, div_factor=10, final_div_factor=1e4),
+    stepped once per training step. max_lr defaults to the optimizer's initial LR.
     """
     
     # Initialize lists to store losses and accuracies
     train_losses = []
     val_losses = []
+
+    one_cycle_scheduler = None
+    if use_one_cycle_lr:
+        max_lr = (
+            one_cycle_max_lr
+            if one_cycle_max_lr is not None
+            else optimizer.param_groups[0]["lr"]
+        )
+        one_cycle_scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer,
+            max_lr=max_lr,
+            total_steps=epochs,
+            pct_start=0.2,
+            anneal_strategy="cos",
+            div_factor=10.0,
+            final_div_factor=1e4,
+        )
 
     # Initialize iterator for the train loader
     train_loader_iter = iter(train_loader)
@@ -75,6 +98,8 @@ def train(
         train_loss = loss(y_hat, y)
         train_loss.backward()
         optimizer.step()
+        if one_cycle_scheduler is not None:
+            one_cycle_scheduler.step()
 
         # Store the loss
         train_losses.append(train_loss.item())

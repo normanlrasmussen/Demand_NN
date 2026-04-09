@@ -1,5 +1,10 @@
+Things to Try
 
-I want to get the best store predictor 
--> Try lr scheduling
--> Try drop out
--> 
+-> Data normalization
+-> Try prediciting several days of data
+
+
+
+-> More feature engeinerring
+-> More expierements with networkselection. 
+

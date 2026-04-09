@@ -41,6 +41,7 @@ def create_data_all_data(
     features are computed from sales only.
 
     Here is a list of all possible specs:
+        "sales",
         "one_hot_month",
         "one_hot_week",
         "one_hot_day_of_week",
@@ -302,7 +303,9 @@ def create_data_all_data(
     if output_file is not None:
         df.to_csv(output_file, index=False)
 
-    drop_columns = ["date", "store", "item", "sales", "next_sales"]
+    drop_columns = ["date", "store", "item", "next_sales"]
+    if "sales" not in specs:
+        drop_columns.append("sales")
     target_columns = ["next_sales"]
 
     return df, drop_columns, target_columns
@@ -323,6 +326,7 @@ def create_data_consolidated_by_store(
     The CSV must include next_sales.
 
     Here is a list of all possible specs:
+        "sales",
         "one_hot_month",
         "one_hot_week",
         "one_hot_day_of_week",
@@ -599,7 +603,9 @@ def create_data_consolidated_by_store(
     if output_file is not None:
         df.to_csv(output_file, index=False)
 
-    drop_columns = ["date", "store"] + item_columns + next_target_columns
+    drop_columns = ["date", "store"] + next_target_columns
+    if "sales" not in specs:
+        drop_columns += item_columns
     target_columns = next_target_columns
 
     return df, drop_columns, target_columns
@@ -621,6 +627,7 @@ def create_data_consolidated_by_item(
     The CSV must include next_sales.
 
     Here is a list of all possible specs:
+        "sales",
         "one_hot_month",
         "one_hot_week",
         "one_hot_day_of_week",
@@ -896,7 +903,9 @@ def create_data_consolidated_by_item(
     if output_file is not None:
         df.to_csv(output_file, index=False)
 
-    drop_columns = ["date", "item"] + store_columns + next_target_columns
+    drop_columns = ["date", "item"] + next_target_columns
+    if "sales" not in specs:
+        drop_columns += store_columns
     target_columns = next_target_columns
 
     return df, drop_columns, target_columns
@@ -917,6 +926,7 @@ def create_data_consolidated_by_both(
     The CSV must include next_sales.
 
     Here is a list of all possible specs:
+        "sales",
         "one_hot_month",
         "one_hot_week",
         "one_hot_day_of_week",
@@ -1180,7 +1190,9 @@ def create_data_consolidated_by_both(
     if output_file is not None:
         df.to_csv(output_file, index=False)
 
-    drop_columns = ["date"] + store_item_columns + next_target_columns
+    drop_columns = ["date"] + next_target_columns
+    if "sales" not in specs:
+        drop_columns += store_item_columns
     target_columns = next_target_columns
 
     return df, drop_columns, target_columns

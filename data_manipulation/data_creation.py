@@ -17,6 +17,14 @@ ROLLING_EMA_SPECS = ("7_day_rolling_ema", "30_day_rolling_ema", "90_day_rolling_
 LAG_SPECS = {"1_day_lag": 1, "2_day_lag": 2, "3_day_lag": 3, "4_day_lag": 4, "5_day_lag": 5, "6_day_lag": 6, "7_day_lag": 7,
              "14_day_lag": 14, "28_day_lag": 28, "365_day_lag": 365}
 
+
+def _require_next_sales(df: pd.DataFrame) -> None:
+    if "next_sales" not in df.columns:
+        raise ValueError(
+            "Input CSV must include a next_sales column (next calendar day's sales per row)."
+        )
+
+
 def create_data_all_data(
     input_file:str="../data/demand_data.csv", 
     output_file:str=None, 
@@ -28,6 +36,9 @@ def create_data_all_data(
     This doesn't consolidate the data by store or item.
 
     returns df, drop_columns, target_columns
+
+    The CSV must include next_sales. target_columns is ["next_sales"]; rolling/lag/diff
+    features are computed from sales only.
 
     Here is a list of all possible specs:
         "one_hot_month",
@@ -79,9 +90,9 @@ def create_data_all_data(
     if not specs:
         raise ValueError("Specs must be provided for data creation in create_data_all_data")
 
-    # Load the data 
-    # NOTE the colums are date,store,item,sales
+    # Load the data (date, store, item, sales, next_sales)
     df = pd.read_csv(input_file)
+    _require_next_sales(df)
 
     # Apply the data mask
     if data_mask is not None:
@@ -263,12 +274,12 @@ def create_data_all_data(
 
     # Add diff features (sales - X day lag); fill NaN with bfill
     DIFF_SPECS = {
-        "diff_1_day": 1,
-        "diff_7_day": 7,
-        "diff_30_day": 30,
-        "diff_90_day": 90,
-        "diff_180_day": 180,
-        "diff_365_day": 365,
+        "diff_1_day": 0,
+        "diff_7_day": 6,
+        "diff_30_day": 29,
+        "diff_90_day": 89,
+        "diff_180_day": 179,
+        "diff_365_day": 364,
     }
     diff_cols_added: list[str] = []
     diff_new: dict[str, pd.Series] = {}
@@ -291,9 +302,8 @@ def create_data_all_data(
     if output_file is not None:
         df.to_csv(output_file, index=False)
 
-    # Determine the columns to drop and the target columns
-    drop_columns = ["date", "store", "item", "sales"]
-    target_columns = ["sales"]
+    drop_columns = ["date", "store", "item", "sales", "next_sales"]
+    target_columns = ["next_sales"]
 
     return df, drop_columns, target_columns
     
@@ -308,6 +318,9 @@ def create_data_consolidated_by_store(
     This consolidates the data by store, but not by item.
 
     returns df, drop_columns, target_columns
+
+    Targets are next_item_* (tomorrow per item); features use same-day item_* sales only.
+    The CSV must include next_sales.
 
     Here is a list of all possible specs:
         "one_hot_month",
@@ -359,9 +372,9 @@ def create_data_consolidated_by_store(
     if not specs:
         raise ValueError("Specs must be provided for data creation in create_data_all_data")
 
-    # Load the data 
-    # NOTE the colums are date,store,item,sales
+    # Load the data (date, store, item, sales, next_sales)
     df = pd.read_csv(input_file)
+    _require_next_sales(df)
 
     # Apply the data mask
     if data_mask is not None:
@@ -378,16 +391,26 @@ def create_data_consolidated_by_store(
         combined_mask = np.logical_and.reduce(resolved_masks)
         df = df[combined_mask]
 
-    # Create a new dataframe with the data consolidated by store
-    # Combine all items into a multi-output target per (date, store)
-    wide = df.pivot(
+    # item_* = same-day sales (all stats use these); next_item_* = targets
+    wide_sales = df.pivot(
         index=["date", "store"],
         columns="item",
         values="sales",
     )
-    item_columns = [f"item_{c}" for c in wide.columns]
-    wide.columns = item_columns
-    df = wide.reset_index()
+    item_ids = list(wide_sales.columns)
+    item_columns = [f"item_{c}" for c in item_ids]
+    wide_sales.columns = item_columns
+    wide_next = df.pivot(
+        index=["date", "store"],
+        columns="item",
+        values="next_sales",
+    )
+    wide_next = wide_next.reindex(columns=item_ids)
+    next_target_columns = [f"next_item_{c}" for c in item_ids]
+    wide_next.columns = next_target_columns
+    df = wide_sales.reset_index().merge(
+        wide_next.reset_index(), on=["date", "store"], how="inner"
+    )
 
     # Add various features related to time
     date_dt = pd.to_datetime(df["date"])
@@ -543,12 +566,12 @@ def create_data_consolidated_by_store(
 
     # Diffs (col - X day lag); fill NaN with bfill
     DIFF_SPECS = {
-        "diff_1_day": 1,
-        "diff_7_day": 7,
-        "diff_30_day": 30,
-        "diff_90_day": 90,
-        "diff_180_day": 180,
-        "diff_365_day": 365,
+        "diff_1_day": 0,
+        "diff_7_day": 6,
+        "diff_30_day": 29,
+        "diff_90_day": 89,
+        "diff_180_day": 179,
+        "diff_365_day": 364,
     }
     diff_cols_added: list[str] = []
     diff_new: dict[str, pd.Series] = {}
@@ -576,9 +599,8 @@ def create_data_consolidated_by_store(
     if output_file is not None:
         df.to_csv(output_file, index=False)
 
-    # Determine the columns to drop and the target columns
-    drop_columns = ["date", "store"] + item_columns
-    target_columns = item_columns
+    drop_columns = ["date", "store"] + item_columns + next_target_columns
+    target_columns = next_target_columns
 
     return df, drop_columns, target_columns
 
@@ -594,6 +616,9 @@ def create_data_consolidated_by_item(
     This consolidates the data by item, but not by store.
 
     returns df, drop_columns, target_columns
+
+    Targets are next_store_* (tomorrow per store); features use same-day store_* sales only.
+    The CSV must include next_sales.
 
     Here is a list of all possible specs:
         "one_hot_month",
@@ -645,9 +670,9 @@ def create_data_consolidated_by_item(
     if not specs:
         raise ValueError("Specs must be provided for data creation in create_data_all_data")
 
-    # Load the data 
-    # NOTE the colums are date,store,item,sales
+    # Load the data (date, store, item, sales, next_sales)
     df = pd.read_csv(input_file)
+    _require_next_sales(df)
 
     # Apply the data mask
     if data_mask is not None:
@@ -664,16 +689,25 @@ def create_data_consolidated_by_item(
         combined_mask = np.logical_and.reduce(resolved_masks)
         df = df[combined_mask]
 
-    # Create a new dataframe with the data consolidated by item
-    # Combine all stores into a multi-output target per (date, item)
-    wide = df.pivot(
+    wide_sales = df.pivot(
         index=["date", "item"],
         columns="store",
         values="sales",
     )
-    store_columns = [f"store_{c}" for c in wide.columns]
-    wide.columns = store_columns
-    df = wide.reset_index()
+    store_ids = list(wide_sales.columns)
+    store_columns = [f"store_{c}" for c in store_ids]
+    wide_sales.columns = store_columns
+    wide_next = df.pivot(
+        index=["date", "item"],
+        columns="store",
+        values="next_sales",
+    )
+    wide_next = wide_next.reindex(columns=store_ids)
+    next_target_columns = [f"next_store_{c}" for c in store_ids]
+    wide_next.columns = next_target_columns
+    df = wide_sales.reset_index().merge(
+        wide_next.reset_index(), on=["date", "item"], how="inner"
+    )
 
     # Add various features related to time
     date_dt = pd.to_datetime(df["date"])
@@ -829,12 +863,12 @@ def create_data_consolidated_by_item(
 
     # Diffs (col - X day lag); fill NaN with bfill
     DIFF_SPECS = {
-        "diff_1_day": 1,
-        "diff_7_day": 7,
-        "diff_30_day": 30,
-        "diff_90_day": 90,
-        "diff_180_day": 180,
-        "diff_365_day": 365,
+        "diff_1_day": 0,
+        "diff_7_day": 6,
+        "diff_30_day": 29,
+        "diff_90_day": 89,
+        "diff_180_day": 179,
+        "diff_365_day": 364,
     }
     diff_cols_added: list[str] = []
     diff_new: dict[str, pd.Series] = {}
@@ -862,9 +896,8 @@ def create_data_consolidated_by_item(
     if output_file is not None:
         df.to_csv(output_file, index=False)
 
-    # Determine the columns to drop and the target columns
-    drop_columns = ["date", "item"] + store_columns
-    target_columns = store_columns
+    drop_columns = ["date", "item"] + store_columns + next_target_columns
+    target_columns = next_target_columns
 
     return df, drop_columns, target_columns
 
@@ -879,6 +912,9 @@ def create_data_consolidated_by_both(
     This consolidates the data by both item and store.
 
     returns df, drop_columns, target_columns
+
+    Targets are next_store_*_item_*; features use same-day store_*_item_* sales only.
+    The CSV must include next_sales.
 
     Here is a list of all possible specs:
         "one_hot_month",
@@ -930,9 +966,9 @@ def create_data_consolidated_by_both(
     if not specs:
         raise ValueError("Specs must be provided for data creation in create_data_all_data")
 
-    # Load the data 
-    # NOTE the colums are date,store,item,sales
+    # Load the data (date, store, item, sales, next_sales)
     df = pd.read_csv(input_file)
+    _require_next_sales(df)
 
     # Apply the data mask
     if data_mask is not None:
@@ -949,16 +985,25 @@ def create_data_consolidated_by_both(
         combined_mask = np.logical_and.reduce(resolved_masks)
         df = df[combined_mask]
 
-    # Create a new dataframe with the data consolidated by both item and store
-    # Combine all stores and items into a multi-output target per (date)
-    wide = df.pivot(
+    wide_sales = df.pivot(
         index=["date"],
         columns=["store", "item"],
         values="sales",
     )
-    wide.columns = [f"store_{s}_item_{i}" for (s, i) in wide.columns]
-    store_item_columns = list(wide.columns)
-    df = wide.reset_index()
+    col_tuples = list(wide_sales.columns)
+    store_item_columns = [f"store_{s}_item_{i}" for (s, i) in col_tuples]
+    wide_sales.columns = store_item_columns
+    wide_next = df.pivot(
+        index=["date"],
+        columns=["store", "item"],
+        values="next_sales",
+    )
+    wide_next = wide_next.reindex(columns=col_tuples)
+    next_target_columns = [f"next_store_{s}_item_{i}" for (s, i) in col_tuples]
+    wide_next.columns = next_target_columns
+    df = wide_sales.reset_index().merge(
+        wide_next.reset_index(), on=["date"], how="inner"
+    )
 
     # Add various features related to time
     date_dt = pd.to_datetime(df["date"])
@@ -1107,12 +1152,12 @@ def create_data_consolidated_by_both(
 
     # Diffs (col - X day lag); fill NaN with bfill
     DIFF_SPECS = {
-        "diff_1_day": 1,
-        "diff_7_day": 7,
-        "diff_30_day": 30,
-        "diff_90_day": 90,
-        "diff_180_day": 180,
-        "diff_365_day": 365,
+        "diff_1_day": 0,
+        "diff_7_day": 6,
+        "diff_30_day": 29,
+        "diff_90_day": 89,
+        "diff_180_day": 179,
+        "diff_365_day": 364,
     }
     diff_cols_added: list[str] = []
     diff_new: dict[str, pd.Series] = {}
@@ -1135,9 +1180,8 @@ def create_data_consolidated_by_both(
     if output_file is not None:
         df.to_csv(output_file, index=False)
 
-    # Determine the columns to drop and the target columns
-    drop_columns = ["date"] + store_item_columns
-    target_columns = store_item_columns
+    drop_columns = ["date"] + store_item_columns + next_target_columns
+    target_columns = next_target_columns
 
     return df, drop_columns, target_columns
 

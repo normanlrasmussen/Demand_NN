@@ -47,6 +47,7 @@ def train(
     use_tqdm: bool = True,
     use_one_cycle_lr: bool = False,
     one_cycle_max_lr: float | None = None,
+    normalize_func:callable = None,
 ) -> tuple[list[float], list[float]]:
     """
     This will train the model.
@@ -92,6 +93,9 @@ def train(
         # Move data to device
         x, y = x.to(device), y.to(device)
 
+        if normalize_func is not None:
+            x = normalize_func(x)
+
         # Perform a forward pass and compute the loss
         optimizer.zero_grad()
         y_hat = net(x)
@@ -115,6 +119,8 @@ def train(
                 with torch.no_grad():
                     for x, y in val_loader:
                         x, y = x.to(device), y.to(device)
+                        if normalize_func is not None:
+                            x = normalize_func(x)
                         y_hat = net(x)
                         val_loss_sum += loss(y_hat, y).item()
                         val_batches += 1
@@ -126,7 +132,13 @@ def train(
 
     return train_losses, val_losses
 
-def get_test_loss(net:torch.nn.Module, test_loader:torch.utils.data.DataLoader, loss:callable, device:str) -> list[float]:
+def get_test_loss(
+    net:torch.nn.Module, 
+    test_loader:torch.utils.data.DataLoader, 
+    loss:callable, 
+    device:str, 
+    normalize_func:callable = None
+    ) -> list[float]:
     """
     Get the loss for the test set and return a list of losses
     """
@@ -134,8 +146,33 @@ def get_test_loss(net:torch.nn.Module, test_loader:torch.utils.data.DataLoader, 
     with torch.no_grad():
         for x, y in test_loader:
             x, y = x.to(device), y.to(device)
+            if normalize_func is not None:
+                x = normalize_func(x)
             y_hat = net(x)
             test_loss = loss(y_hat, y)
             test_losses.append(test_loss.item())
     return test_losses
+
+def compute_mean_std(train_loader, device=None):
+    """
+    Per-feature mean and population std from the training set's full `dataset.x`.
+    `device` defaults to where `dataset.x` already lives; pass e.g. `"cuda"` to
+    place stats on the training device and avoid extra copies during `normalize_batch`.
+    """
+    x = train_loader.dataset.x
+    if x.shape[0] == 0:
+        raise ValueError("Training dataset is empty; cannot compute normalization statistics.")
+    dev = device if device is not None else x.device
+    x = x.to(device=dev, dtype=torch.float32)
+    mean = x.mean(dim=0)
+    std = x.std(dim=0, unbiased=False)
+    std = torch.where(std > 0, std, torch.ones_like(std))
+    return mean, std
+
+def normalize_batch(x: torch.Tensor, mean: torch.Tensor, std: torch.Tensor) -> torch.Tensor:
+    """Z-score `x` using `mean`/`std`; aligns device and dtype with `x`."""
+    xf = x.float()
+    m = mean.to(device=xf.device, dtype=xf.dtype)
+    s = std.to(device=xf.device, dtype=xf.dtype)
+    return (xf - m) / s
 

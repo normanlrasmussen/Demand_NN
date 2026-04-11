@@ -25,11 +25,41 @@ def _require_next_sales(df: pd.DataFrame) -> None:
         )
 
 
+def _validate_days_to_predict(days_to_predict: int) -> int:
+    n = int(days_to_predict)
+    if n < 1:
+        raise ValueError("days_to_predict must be a positive integer")
+    return n
+
+
+def _truncate_long_panel_store_item(df: pd.DataFrame, n: int) -> pd.DataFrame:
+    """Drop the last n chronological rows per (store, item)."""
+    if n <= 0:
+        return df
+    df = df.sort_values(["store", "item", "date"])
+    # 0 = last row in group, 1 = second-to-last, ... (avoid groupby.apply dropping keys)
+    tail_rank = df.groupby(["store", "item"], sort=False).cumcount(ascending=False)
+    return df.loc[tail_rank >= n].reset_index(drop=True)
+
+
+def _add_long_horizon_targets(
+    df: pd.DataFrame, days_to_predict: int
+) -> pd.DataFrame:
+    """Add _tgt_day_k = sales k days ahead (per store, item); caller truncates."""
+    df = df.sort_values(["store", "item", "date"])
+    for k in range(1, days_to_predict + 1):
+        df[f"_tgt_day_{k}"] = df.groupby(["store", "item"], sort=False)[
+            "sales"
+        ].shift(-k)
+    return df
+
+
 def create_data_all_data(
     input_file:str="../data/demand_data.csv", 
     output_file:str=None, 
     specs: Tuple[str, ...]=(),
-    data_mask: Tuple[str, int] | None = None
+    data_mask: Tuple[str, int] | None = None,
+    days_to_predict: int = 1,
     ):
     """
     Create the data for a given schema of inputs.
@@ -37,8 +67,10 @@ def create_data_all_data(
 
     returns df, drop_columns, target_columns
 
-    The CSV must include next_sales. target_columns is ["next_sales"]; rolling/lag/diff
-    features are computed from sales only.
+    The CSV must include next_sales. With days_to_predict=1, target_columns is
+    ["next_sales"] and the last row per (store, item) is dropped (no observable future).
+    With days_to_predict=n>1, target_columns are day_1..day_n (sales n days ahead) and
+    the last n rows per (store, item) are dropped. Features are always from same-day sales only.
 
     Here is a list of all possible specs:
         "sales",
@@ -298,6 +330,18 @@ def create_data_all_data(
             }
         )
 
+    n_horizon = _validate_days_to_predict(days_to_predict)
+    df = df.sort_values(["store", "item", "date"])
+    if n_horizon == 1:
+        df = _truncate_long_panel_store_item(df, 1)
+        target_columns = ["next_sales"]
+    else:
+        for k in range(1, n_horizon + 1):
+            df[f"day_{k}"] = df.groupby(["store", "item"], sort=False)[
+                "sales"
+            ].shift(-k)
+        df = _truncate_long_panel_store_item(df, n_horizon)
+        target_columns = [f"day_{k}" for k in range(1, n_horizon + 1)]
 
     # Check to see if outfile
     if output_file is not None:
@@ -306,7 +350,6 @@ def create_data_all_data(
     drop_columns = ["date", "store", "item", "next_sales"]
     if "sales" not in specs:
         drop_columns.append("sales")
-    target_columns = ["next_sales"]
 
     return df, drop_columns, target_columns
     
@@ -314,7 +357,8 @@ def create_data_consolidated_by_store(
     input_file:str="../data/demand_data.csv", 
     output_file:str=None, 
     specs: Tuple[str, ...]=(),
-    data_mask: Tuple[str, int] | None = None
+    data_mask: Tuple[str, int] | None = None,
+    days_to_predict: int = 1,
     ):
     """
     Create the data for a given schema of inputs.
@@ -322,7 +366,9 @@ def create_data_consolidated_by_store(
 
     returns df, drop_columns, target_columns
 
-    Targets are next_item_* (tomorrow per item); features use same-day item_* sales only.
+    Targets are item_<id>_day_<h> for horizon h=1..days_to_predict (all items for day 1,
+    then all items for day 2, ...). The last days_to_predict rows per (store, item) are
+    dropped before pivoting. Features use same-day item_* sales only.
     The CSV must include next_sales.
 
     Here is a list of all possible specs:
@@ -395,7 +441,11 @@ def create_data_consolidated_by_store(
         combined_mask = np.logical_and.reduce(resolved_masks)
         df = df[combined_mask]
 
-    # item_* = same-day sales (all stats use these); next_item_* = targets
+    n_horizon = _validate_days_to_predict(days_to_predict)
+    df = _add_long_horizon_targets(df, n_horizon)
+    df = _truncate_long_panel_store_item(df, n_horizon)
+
+    # item_* = same-day sales (all stats use these); item_*_day_* = targets
     wide_sales = df.pivot(
         index=["date", "store"],
         columns="item",
@@ -404,17 +454,19 @@ def create_data_consolidated_by_store(
     item_ids = list(wide_sales.columns)
     item_columns = [f"item_{c}" for c in item_ids]
     wide_sales.columns = item_columns
-    wide_next = df.pivot(
-        index=["date", "store"],
-        columns="item",
-        values="next_sales",
-    )
-    wide_next = wide_next.reindex(columns=item_ids)
-    next_target_columns = [f"next_item_{c}" for c in item_ids]
-    wide_next.columns = next_target_columns
-    df = wide_sales.reset_index().merge(
-        wide_next.reset_index(), on=["date", "store"], how="inner"
-    )
+
+    df_wide = wide_sales.reset_index()
+    next_target_columns: list[str] = []
+    for k in range(1, n_horizon + 1):
+        wk = df.pivot(
+            index=["date", "store"], columns="item", values=f"_tgt_day_{k}"
+        )
+        wk = wk.reindex(columns=item_ids)
+        wk.columns = [f"item_{c}_day_{k}" for c in item_ids]
+        df_wide = df_wide.merge(wk.reset_index(), on=["date", "store"], how="inner")
+        next_target_columns.extend([f"item_{c}_day_{k}" for c in item_ids])
+
+    df = df_wide
 
     # Add various features related to time
     date_dt = pd.to_datetime(df["date"])
@@ -615,7 +667,8 @@ def create_data_consolidated_by_item(
     input_file:str="../data/demand_data.csv", 
     output_file:str=None, 
     specs: Tuple[str, ...]=(),
-    data_mask: Tuple[str, int] | None = None
+    data_mask: Tuple[str, int] | None = None,
+    days_to_predict: int = 1,
     ):
     """
     Create the data for a given schema of inputs.
@@ -623,7 +676,9 @@ def create_data_consolidated_by_item(
 
     returns df, drop_columns, target_columns
 
-    Targets are next_store_* (tomorrow per store); features use same-day store_* sales only.
+    Targets are store_<id>_day_<h> for h=1..days_to_predict (all stores for day 1, then
+    all stores for day 2, ...). The last days_to_predict rows per (store, item) are dropped
+    before pivoting. Features use same-day store_* sales only.
     The CSV must include next_sales.
 
     Here is a list of all possible specs:
@@ -696,6 +751,10 @@ def create_data_consolidated_by_item(
         combined_mask = np.logical_and.reduce(resolved_masks)
         df = df[combined_mask]
 
+    n_horizon = _validate_days_to_predict(days_to_predict)
+    df = _add_long_horizon_targets(df, n_horizon)
+    df = _truncate_long_panel_store_item(df, n_horizon)
+
     wide_sales = df.pivot(
         index=["date", "item"],
         columns="store",
@@ -704,17 +763,19 @@ def create_data_consolidated_by_item(
     store_ids = list(wide_sales.columns)
     store_columns = [f"store_{c}" for c in store_ids]
     wide_sales.columns = store_columns
-    wide_next = df.pivot(
-        index=["date", "item"],
-        columns="store",
-        values="next_sales",
-    )
-    wide_next = wide_next.reindex(columns=store_ids)
-    next_target_columns = [f"next_store_{c}" for c in store_ids]
-    wide_next.columns = next_target_columns
-    df = wide_sales.reset_index().merge(
-        wide_next.reset_index(), on=["date", "item"], how="inner"
-    )
+
+    df_wide = wide_sales.reset_index()
+    next_target_columns: list[str] = []
+    for k in range(1, n_horizon + 1):
+        wk = df.pivot(
+            index=["date", "item"], columns="store", values=f"_tgt_day_{k}"
+        )
+        wk = wk.reindex(columns=store_ids)
+        wk.columns = [f"store_{c}_day_{k}" for c in store_ids]
+        df_wide = df_wide.merge(wk.reset_index(), on=["date", "item"], how="inner")
+        next_target_columns.extend([f"store_{c}_day_{k}" for c in store_ids])
+
+    df = df_wide
 
     # Add various features related to time
     date_dt = pd.to_datetime(df["date"])
@@ -914,7 +975,8 @@ def create_data_consolidated_by_both(
     input_file:str="../data/demand_data.csv", 
     output_file:str=None, 
     specs: Tuple[str, ...]=(),
-    data_mask: Tuple[str, int] | None = None
+    data_mask: Tuple[str, int] | None = None,
+    days_to_predict: int = 1,
     ):
     """
     Create the data for a given schema of inputs.
@@ -922,7 +984,10 @@ def create_data_consolidated_by_both(
 
     returns df, drop_columns, target_columns
 
-    Targets are next_store_*_item_*; features use same-day store_*_item_* sales only.
+    Targets are store_<s>_item_<i>_day_<h> for h=1..days_to_predict, ordered as all
+    (store, item) pairs for horizon day 1, then all pairs for day 2, etc. The last
+    days_to_predict rows per (store, item) are dropped before pivoting. Features use
+    same-day store_*_item_* sales only.
     The CSV must include next_sales.
 
     Here is a list of all possible specs:
@@ -995,6 +1060,10 @@ def create_data_consolidated_by_both(
         combined_mask = np.logical_and.reduce(resolved_masks)
         df = df[combined_mask]
 
+    n_horizon = _validate_days_to_predict(days_to_predict)
+    df = _add_long_horizon_targets(df, n_horizon)
+    df = _truncate_long_panel_store_item(df, n_horizon)
+
     wide_sales = df.pivot(
         index=["date"],
         columns=["store", "item"],
@@ -1003,17 +1072,21 @@ def create_data_consolidated_by_both(
     col_tuples = list(wide_sales.columns)
     store_item_columns = [f"store_{s}_item_{i}" for (s, i) in col_tuples]
     wide_sales.columns = store_item_columns
-    wide_next = df.pivot(
-        index=["date"],
-        columns=["store", "item"],
-        values="next_sales",
-    )
-    wide_next = wide_next.reindex(columns=col_tuples)
-    next_target_columns = [f"next_store_{s}_item_{i}" for (s, i) in col_tuples]
-    wide_next.columns = next_target_columns
-    df = wide_sales.reset_index().merge(
-        wide_next.reset_index(), on=["date"], how="inner"
-    )
+
+    df_wide = wide_sales.reset_index()
+    next_target_columns: list[str] = []
+    for k in range(1, n_horizon + 1):
+        wk = df.pivot(
+            index=["date"], columns=["store", "item"], values=f"_tgt_day_{k}"
+        )
+        wk = wk.reindex(columns=col_tuples)
+        wk.columns = [f"store_{s}_item_{i}_day_{k}" for (s, i) in col_tuples]
+        df_wide = df_wide.merge(wk.reset_index(), on=["date"], how="inner")
+        next_target_columns.extend(
+            [f"store_{s}_item_{i}_day_{k}" for (s, i) in col_tuples]
+        )
+
+    df = df_wide
 
     # Add various features related to time
     date_dt = pd.to_datetime(df["date"])
@@ -1200,6 +1273,11 @@ def create_data_consolidated_by_both(
 
 
 if __name__ == "__main__":
-    df, _, _ =create_data_consolidated_by_both(specs=("7_day_rolling_mean"))
+    from pathlib import Path
+
+    _repo_data = Path(__file__).resolve().parent.parent / "data" / "demand_data.csv"
+    df, _, _ = create_data_consolidated_by_both(
+        input_file=str(_repo_data), specs=("7_day_rolling_mean",)
+    )
     print(df.columns)
     

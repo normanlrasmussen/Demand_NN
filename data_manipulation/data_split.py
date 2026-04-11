@@ -44,20 +44,44 @@ def create_dataloader(
     data_mask: list[tuple[str, int]] | None = None,  # list of boolean masks for filtering
     combine_items: bool = False, # Put all items into one row
     combine_stores: bool = False, # Put all stores into one row
+    days_to_predict: int = 1,
     ):
     """
-    Create the dataloaders for the train, val, and test sets
+    Create the dataloaders for the train, val, and test sets.
+
+    days_to_predict is forwarded to the data_creation helpers: multi-step targets and
+    tail truncation per (store, item) are applied there; target_columns width matches it.
     """
 
     # Get the data
     if not combine_items and not combine_stores:
-        df, drop_columns, target_columns = create_data_all_data(input_file=input_file, specs=specs, data_mask=data_mask)
+        df, drop_columns, target_columns = create_data_all_data(
+            input_file=input_file,
+            specs=specs,
+            data_mask=data_mask,
+            days_to_predict=days_to_predict,
+        )
     elif combine_items and not combine_stores:
-        df, drop_columns, target_columns = create_data_consolidated_by_item(input_file=input_file, specs=specs, data_mask=data_mask)
+        df, drop_columns, target_columns = create_data_consolidated_by_item(
+            input_file=input_file,
+            specs=specs,
+            data_mask=data_mask,
+            days_to_predict=days_to_predict,
+        )
     elif not combine_items and combine_stores:
-        df, drop_columns, target_columns = create_data_consolidated_by_store(input_file=input_file, specs=specs, data_mask=data_mask)
+        df, drop_columns, target_columns = create_data_consolidated_by_store(
+            input_file=input_file,
+            specs=specs,
+            data_mask=data_mask,
+            days_to_predict=days_to_predict,
+        )
     elif combine_items and combine_stores:
-        df, drop_columns, target_columns = create_data_consolidated_by_both(input_file=input_file, specs=specs, data_mask=data_mask)
+        df, drop_columns, target_columns = create_data_consolidated_by_both(
+            input_file=input_file,
+            specs=specs,
+            data_mask=data_mask,
+            days_to_predict=days_to_predict,
+        )
 
     # Split the data into train, val, and test
     train_df = df[df['date'] < date_splits[0]]
@@ -80,4 +104,21 @@ def create_dataloader(
 
 
 if __name__ == "__main__":
-    train_loader, val_loader, test_loader = create_dataloader(batch_size=8, combine_items=True, combine_stores=True)
+    from pathlib import Path
+
+    _data = Path(__file__).resolve().parent.parent / "data" / "demand_data.csv"
+    _specs: Tuple[str, ...] = ("sales",)
+    train_loader, val_loader, test_loader = create_dataloader(
+        input_file=str(_data),
+        specs=_specs,
+        batch_size=8,
+        combine_items=True,
+        combine_stores=True,
+        days_to_predict=2,
+        num_workers=0,
+        pin_memory=False,
+    )
+    ds = train_loader.dataset
+    x, y = next(iter(train_loader))
+    assert y.shape[1] == ds.y.shape[1] == len(ds.y_columns)
+    print("batch x", x.shape, "batch y", y.shape, "targets", len(ds.y_columns))
